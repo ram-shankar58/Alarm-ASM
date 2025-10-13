@@ -23,7 +23,15 @@ newline:       db 10,0
 
 cmd_notify:    db "/usr/bin/notify-send",0
 arg_title:     db "⏰ Clockman Alarm!",0
-arg_msg:       db "Alarm time reached!",0
+arg_msg:       db "Time to wake up!",0
+
+; argv array for execve
+notify_argv:   dq cmd_notify, arg_title, arg_msg, 0
+
+; timespec for nanosleep (60 seconds)
+sleep_spec:    dq 60, 0    ; 60 seconds, 0 nanoseconds
+colon_space:   db ": ",0
+temp_char:     times 10 db 0
 
 section .bss
 input:         resb 256
@@ -68,6 +76,19 @@ read_line:
     mov rsi, input
     mov rdx, 255
     syscall
+    
+    ; Remove newline character
+    mov rcx, 0
+.find_newline:
+    cmp byte [input + rcx], 10  ; newline
+    je .remove_newline
+    cmp byte [input + rcx], 0
+    je .done
+    inc rcx
+    jmp .find_newline
+.remove_newline:
+    mov byte [input + rcx], 0   ; replace newline with null
+.done:
     ret
 
 ; ───────────────────────────────
@@ -92,32 +113,95 @@ atoi:
     ret
 
 ; ───────────────────────────────
-; Helper: call notify-send
+; Helper: print number (rdi = number)
 ; ───────────────────────────────
-notify_alarm:
-    mov rax, 59
-    lea rdi, [rel cmd_notify]
-    lea rsi, [rel arg_title]
-    lea rdx, [rel arg_msg]
-    syscall
+print_number:
+    cmp rdi, 10
+    jb .single_digit
+    
+    ; Two digit number
+    mov rax, rdi
+    mov rbx, 10
+    xor rdx, rdx
+    div rbx
+    
+    add rax, '0'
+    mov [temp_char], al
+    add rdx, '0'  
+    mov [temp_char+1], dl
+    mov byte [temp_char+2], 0
+    lea rdi, [temp_char]
+    call print
+    ret
+    
+.single_digit:
+    add rdi, '0'
+    mov [temp_char], dil
+    mov byte [temp_char+1], 0
+    lea rdi, [temp_char]
+    call print
     ret
 
 ; ───────────────────────────────
-; Helper: get system time (strftime-like)
-; returns HH and MM as integers
+; Helper: call notify-send
+; ───────────────────────────────
+notify_alarm:
+    ; Fork first
+    mov rax, 57      ; sys_fork
+    syscall
+    test rax, rax
+    jz .child        ; if child process
+    ret              ; parent process returns
+
+.child:
+    ; Setup arguments for execve
+    ; argv[0] = "/usr/bin/notify-send"
+    ; argv[1] = "⏰ Clockman Alarm!"  
+    ; argv[2] = "Time to wake up!"
+    ; argv[3] = NULL
+    
+    mov rax, 59      ; sys_execve
+    lea rdi, [rel cmd_notify]     ; program path
+    lea rsi, [rel notify_argv]    ; argv array
+    xor rdx, rdx                  ; envp = NULL
+    syscall
+    
+    ; If execve fails, exit child
+    mov rax, 60      ; sys_exit
+    mov rdi, 1       ; exit code 1
+    syscall
+
+; ───────────────────────────────
+; Helper: get system time 
+; returns HH in eax and MM in ebx
 ; ───────────────────────────────
 get_time:
     mov rax, 201     ; syscall: time
     xor rdi, rdi
     syscall
-
-    mov rdi, rax
-    mov rax, 231     ; localtime
-    syscall
-
-    mov rsi, rax
-    movzx eax, word [rsi+8]    ; tm_hour
-    movzx ebx, word [rsi+10]   ; tm_min
+    
+    ; rax now contains seconds since epoch
+    ; Convert to local time (assuming UTC+0 for simplicity)
+    ; To get hours/minutes: (seconds % 86400) / 3600 = hours
+    ; ((seconds % 86400) % 3600) / 60 = minutes
+    
+    mov rbx, 86400   ; seconds in a day
+    xor rdx, rdx
+    div rbx          ; rdx = seconds since midnight
+    
+    mov rax, rdx     ; seconds since midnight
+    mov rbx, 3600    ; seconds in an hour
+    xor rdx, rdx
+    div rbx          ; rax = hours, rdx = remaining seconds
+    
+    mov rcx, rax     ; save hours in rcx
+    mov rax, rdx     ; remaining seconds
+    mov rbx, 60      ; seconds in a minute
+    xor rdx, rdx
+    div rbx          ; rax = minutes, rdx = seconds
+    
+    mov ebx, eax     ; minutes in ebx
+    mov eax, ecx     ; hours in eax
     ret
 
 ; ───────────────────────────────
@@ -128,19 +212,45 @@ add_alarm:
     call print
     call read_line
 
+    ; Parse hours
     mov rsi, input
     mov rdi, rsi
     call atoi
-    mov bl, [alarm_count]
-    mov [alarm_hours + rbx], al
-
-    add rsi, 3
+    mov cl, al        ; save hours in cl
+    
+    ; Skip to next number (find space, then skip spaces)
+    mov rsi, input
+.find_space:
+    cmp byte [rsi], ' '
+    je .skip_spaces
+    cmp byte [rsi], 0
+    je .error
+    inc rsi
+    jmp .find_space
+    
+.skip_spaces:
+    cmp byte [rsi], ' '
+    jne .parse_mins
+    inc rsi
+    jmp .skip_spaces
+    
+.parse_mins:
     mov rdi, rsi
     call atoi
-    mov [alarm_mins + rbx], al
-
-    add byte [alarm_count], 1
+    mov ch, al        ; save minutes in ch
+    
+    ; Store alarm
+    movzx rbx, byte [alarm_count]
+    mov [alarm_hours + rbx], cl
+    mov [alarm_mins + rbx], ch
+    inc byte [alarm_count]
+    
     mov rdi, added_msg
+    call print
+    ret
+    
+.error:
+    mov rdi, invalid_opt
     call print
     ret
 
@@ -148,12 +258,48 @@ add_alarm:
 ; List Alarms
 ; ───────────────────────────────
 list_alarms:
-    mov al, [alarm_count]
+    movzx rax, byte [alarm_count]
     cmp al, 0
     je .none
+    
     mov rdi, list_header
     call print
+    
+    xor rcx, rcx              ; counter
+.print_loop:
+    cmp rcx, rax
+    jge .done
+    
+    ; Print alarm number
+    mov rdi, rcx
+    add rdi, '1'              ; convert to ASCII
+    mov [temp_char], dil
+    mov byte [temp_char+1], ':'
+    mov byte [temp_char+2], ' '
+    mov byte [temp_char+3], 0
+    lea rdi, [temp_char]
+    call print
+    
+    ; Print hours (simplified - just show as number)
+    movzx rdi, byte [alarm_hours + rcx]
+    call print_number
+    
+    mov rdi, colon_space
+    call print
+    
+    ; Print minutes
+    movzx rdi, byte [alarm_mins + rcx]
+    call print_number
+    
+    mov rdi, newline
+    call print
+    
+    inc rcx
+    jmp .print_loop
+    
+.done:
     ret
+    
 .none:
     mov rdi, no_alarms
     call print
@@ -205,17 +351,22 @@ check_alarms:
 
 .sleep:
     mov rax, 35    ; nanosleep
-    mov rdi, 60     ; 60 seconds
+    lea rdi, [rel sleep_spec]
+    xor rsi, rsi   ; remaining time (NULL)
     syscall
     jmp .loop
 
 ; ───────────────────────────────
 ; MAIN LOOP
 ; ───────────────────────────────
-; ───────────────────────────────
-; MAIN LOOP
-; ───────────────────────────────
 _start:
+    ; Start background alarm checker
+    mov rax, 57      ; sys_fork
+    syscall
+    test rax, rax
+    jz start_daemon  ; child becomes daemon
+    
+    ; Parent continues with menu
 menu_loop:
     mov rdi, menu
     call print
@@ -246,6 +397,10 @@ menu_loop:
 .remove:
     call remove_alarm
     jmp menu_loop
+
+start_daemon:
+    ; Background process - just check alarms
+    call check_alarms
 
 exit_program:
     mov rax, 60

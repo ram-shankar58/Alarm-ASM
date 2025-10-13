@@ -1,5 +1,5 @@
 all:
-	nasm -f elf64 -g src/main.asm -o src/main.o
+	nasm -f elf64 -g src/alarm.asm -o src/main.o
 	ld src/main.o -o asm-alarm
 
 run: all
