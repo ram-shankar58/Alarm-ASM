@@ -60,19 +60,20 @@ list_alarms:
     xor rcx, rcx ;CLAMP TO 0 IF CORRUPTED
     mov [alarm_count], rcx
 .count_ok:
-    xor rdx, rdx ;index =0
+    xor rbx, rbx ;index =0 (use callee-saved reg to avoid syscall clobber)
+    mov r9, rcx ;keep count stable; we will use cl elsewhere
     mov r8, rcx ;save count for returning
 
 .next:
-    cmp rdx, rcx
+    cmp rbx, r9
     jae .done
-    mov bl, [alarms_hh+rdx] ;bl hsa the hour
-    mov bh, [alarms_mm+rdx] ; bh has the minute
+    mov al, [alarms_hh+rbx] ; al has the hour (keep rbx intact)
+    mov dl, [alarms_mm+rbx] ; dl has the minute (keep rbx intact)
 
-    mov al, bl ;al=hour
-    mov cl, 10 ;divisor
+    mov r10b, 10 ;divisor in r10b so we don't clobber count
+    ; hour
     xor ah, ah ;clear the high byte
-    div cl ;al=al/10, ah=al%10
+    div r10b ; al=hour/10, ah=hour%10
     add al, '0' ; '0'+tens digit 
     mov [line_buf], al ;write tens digit
     mov al, ah
@@ -80,9 +81,9 @@ list_alarms:
     mov [line_buf+1], al ; write ones digit
     mov byte [line_buf+2], ':'
     
-    mov al, bh ;al=minute
+    mov al, dl ;al=minute
     xor ah, ah
-    div cl ;al=al/10, ah=al%10
+    div r10b ;al=al/10, ah=al%10
     add al, '0' ; '0'+tens digit 
     mov [line_buf+3], al ;
     mov al, ah ;ones
@@ -95,7 +96,7 @@ list_alarms:
     lea rsi, [rel line_buf] 
     mov rdx, LINE_LEN
     syscall
-    inc rdx
+    inc rbx ;index++
     jmp .next
 
 .done:

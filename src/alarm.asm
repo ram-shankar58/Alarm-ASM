@@ -51,54 +51,82 @@ read_line:
 
 parse_hh_mm:
 ;parse_hh_mm(rdi=ptr) -> rax=hh (0-23) or -1, rbx=mm (0-59)
-    mov rsi, rdi ;rsi=input ptr
-    mov al, [rsi] ;hour tens
-    sub al, '0'
-    jc .bad 
-    cmp al, 9
-    ja .bad 
-    mov bl, al ;bl=tens
-    mov al, [rsi+1] ;hour ones
-    sub al, '0'
-    jc .bad
-    cmp al, 9
-    ja .bad
+    mov rsi, rdi              ; rsi=input ptr
 
-    ;imul bl, byte 10 ; bl=tens*10 THIS GETS ERRORS
-    ;add bl, al ; bl=hr
-    ;NOTE THE ABOVE RESULT IN BUGS, SO WE WIDEN TO 32 BIT AND MULTIPLY AND PUT back
-    
-    movzx ebx, bl ;zero extend hour tens into ebx
-    imul ebx, ebx, 10 
-    add bl, al
-    cmp byte [rsi+2], ' ' ;expect space
-    jne .bad
-    mov al, [rsi+3] ;minute tens
+    ; skip leading spaces
+.skip1:
+    cmp byte [rsi], ' '
+    jne .h1
+    inc rsi
+    jmp .skip1
+
+.h1:
+    mov al, [rsi]             ; first hour digit
+    sub al, '0'
+    jc .bad                   ; not a digit
+    cmp al, 9
+    ja .bad
+    mov bl, al                ; bl = first digit
+    inc rsi                   ; advance
+
+    ; optional second hour digit
+    mov dl, [rsi]
+    cmp dl, '0'
+    jb .one_h_digit
+    cmp dl, '9'
+    ja .one_h_digit
+    sub dl, '0'
+    movzx ebx, bl             ; widen first digit
+    imul ebx, ebx, 10         ; tens * 10
+    add bl, dl                ; bl = tens*10 + ones
+    inc rsi                   ; consumed second digit
+    jmp .after_hour
+
+.one_h_digit:
+    ; hour stays in bl
+
+.after_hour:
+    ; skip spaces before minute
+.skip2:
+    cmp byte [rsi], ' '
+    jne .m1
+    inc rsi
+    jmp .skip2
+
+.m1:
+    mov al, [rsi]             ; first minute digit
     sub al, '0'
     jc .bad
     cmp al, 9
     ja .bad
-    mov bh, al ;bh=10
-    mov al, [rsi+4] ;minute ones
-    sub al, '0'
-    jc .bad
-    cmp al, 9
+    mov bh, al                ; bh = first digit
+    inc rsi
+
+    ; optional second minute digit
+    mov dl, [rsi]
+    cmp dl, '0'
+    jb .one_m_digit
+    cmp dl, '9'
+    ja .one_m_digit
+    sub dl, '0'
+    movzx eax, bh             ; widen first digit
+    imul eax, eax, 10         ; tens * 10
+    movzx ecx, dl             ; ecx = ones
+    add eax, ecx              ; eax = minute value
+    mov bh, al                ; bh = minute (low byte)
+    inc rsi                   ; consumed second digit
+    jmp .after_min
+
+.one_m_digit:
+    ; minute stays in bh
+
+.after_min:
+    cmp bl, 23                ; hour <= 23 ?
     ja .bad
-    ;imul bh, byte 10 ; bh=tens*10
-    ;add bh, al
-    ;SAME EROR AS ABOVE CASE
-    ;SWITCHING TO 32 BIT multiplication
-    movzx eax, bh
-    imul eax, eax, 10
-    movzx ecx, al ; ecx = minute ones
-    add eax, ecx ; eax=minute avlue
-    mov bh, al ; bh=minute (lower byte of eax)
-    cmp bl, 23 ; Check hour <=23
+    cmp bh, 59                ; minute <= 59 ?
     ja .bad
-    cmp bh, 59
-    ja .bad
-    xor rax, rax ;rax=0
-    mov al, bl ; rax=hour
+    xor rax, rax              ; rax = 0
+    mov al, bl                ; rax = hour
     ret
 .bad:
     mov rax, -1
@@ -135,8 +163,9 @@ _start:
     call parse_hh_mm
     cmp rax, -1
     je .bad_add
-    mov rdi, rax ; rdi=hour
-    mov rsi, rbx ; rsi=min
+    mov rdi, rax           ; rdi=hour (low byte used)
+    movzx ecx, bh          ; ecx=minute (zero-extend from bh)
+    mov rsi, rcx           ; rsi=minute
     call add_alarm
     cmp rax, -1
     je .full_list
