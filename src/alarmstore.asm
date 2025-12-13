@@ -7,6 +7,8 @@ section .data
 
 section .bss
     global alarm_count
+    global alarms_hh
+    global alarms_mm
     alarms_hh resb MAX_ALARMS ;hours array in bytes
     alarms_mm resb MAX_ALARMS ; minutes array in bytes
     alarm_count resq 1 ; 64 bit count

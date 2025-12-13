@@ -9,8 +9,11 @@ src/alarmstore.o: src/alarmstore.asm
 src/alarm.o: src/alarm.asm
 	nasm -f elf64 -g $< -o $@
 
-alarm-main: src/alarm.o src/alarmstore.o src/notify.o
-	ld src/alarm.o src/alarmstore.o src/notify.o -o alarm-main
+src/timechecker.o: src/timechecker.asm
+	nasm -f elf64 -g $< -o $@
+
+alarm-main: src/alarm.o src/alarmstore.o src/notify.o src/timechecker.o
+	ld src/alarm.o src/alarmstore.o src/notify.o src/timechecker.o -o alarm-main
 
 run: alarm-main
 	./alarm-main

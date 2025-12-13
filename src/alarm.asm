@@ -18,6 +18,8 @@ section .text
     extern remove_last_alarm
     extern list_alarms
     extern alarm_count
+    extern schedule_alarm
+    extern startcheck
 
 write_cstr:
 ;write_cstr(rdi=ptr) - writes null terminated string to stdout
@@ -163,12 +165,18 @@ _start:
     call parse_hh_mm
     cmp rax, -1
     je .bad_add
-    mov rdi, rax           ; rdi=hour (low byte used)
-    movzx ecx, bh          ; ecx=minute (zero-extend from bh)
-    mov rsi, rcx           ; rsi=minute
+    mov r14, rax           ; r14=save hour (for schedule_alarm later)
+    mov al, bh             ; al=minute (move from bh to low byte)
+    movzx r15, al          ; r15=save minute (zero-extend to 64-bit)
+    mov rdi, r14           ; rdi=hour
+    mov rsi, r15           ; rsi=minute
     call add_alarm
     cmp rax, -1
     je .full_list
+    ; schedule notification for this alarm time
+    mov rdi, r14           ; rdi=saved hour
+    mov rsi, r15           ; rsi=saved minute
+    call schedule_alarm
     lea rdi, [rel added_str]
     call write_cstr
     jmp .menu
